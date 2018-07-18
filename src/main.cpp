@@ -1,9 +1,26 @@
 #include <Arduino.h>
 #include <M5Stack.h>
 #include <SPI.h>
-#define THERMO_COUPLE_SLAVE 21
+#define THERMO_COUPLE_SCK 18
+#define THERMO_COUPLE_MISO 19
+#define THERMO_COUPLE_MOSI 23
+#define THERMO_COUPLE_SLAVE 2
+#define HEATER1 16
+#define HEATER2 17
 float thermocoupleTemp, internalTemp;
+bool isProcessing;
+
 int ReadThermocoupleValue();
+void StandbyRoutine();
+void ProcessRoutine();
+void DrawAxis();
+void IRAM_ATTR OnTimer();
+
+hw_timer_t *timer;
+unsigned int timerCount;
+int interruptCounter;
+volatile SemaphoreHandle_t timerSemaphore;
+portMUX_TYPE timeMux = portMUX_INITIALIZER_UNLOCKED;
 
 void setup() {
   M5.begin(true, false);
@@ -12,21 +29,75 @@ void setup() {
   pinMode(THERMO_COUPLE_SLAVE, OUTPUT);
   digitalWrite(THERMO_COUPLE_SLAVE, HIGH);
 
-  SPI.begin(18, 19, 23, 21);
+  SPI.begin(THERMO_COUPLE_SCK, THERMO_COUPLE_MISO, THERMO_COUPLE_MOSI,
+            THERMO_COUPLE_SLAVE);
   SPI.setBitOrder(MSBFIRST);
   SPI.setClockDivider(SPI_CLOCK_DIV4);
   SPI.setDataMode(SPI_MODE0);
+
+  timer = timerBegin(0, 80, true);
+  timerAttachInterrupt(timer, &OnTimer, true);
+  timerAlarmWrite(timer, 1000000, true);
+
+  timerSemaphore = xSemaphoreCreateBinary();
 }
 
 void loop() {
   M5.Lcd.clearDisplay();
+  while (true) {
+    StandbyRoutine();
+    m5.update();
+    if (m5.BtnB.wasPressed()) {
+      break;
+    }
+    vTaskDelay(1);
+  }
+
+  isProcessing = true;
+  M5.Lcd.clearDisplay();
+  DrawAxis();
+  timerAlarmEnable(timer);
+
+  timerCount = 0;
+  while (isProcessing) {
+    if (interruptCounter > 0){
+      portENTER_CRITICAL(&timeMux);
+      interruptCounter--;
+      portEXIT_CRITICAL(&timeMux);
+      ProcessRoutine();
+    }
+    vTaskDelay(1);
+  }
+  timerAlarmDisable(timer);
+}
+
+void StandbyRoutine() {
+  M5.Lcd.drawString("StandBy", 50, 0);
+  M5.Lcd.drawString("Press center button to start", 50, 10);
+}
+
+void IRAM_ATTR OnTimer() {
+  portENTER_CRITICAL_ISR(&timeMux);
+  interruptCounter++;
+  portEXIT_CRITICAL_ISR(&timeMux);
+}
+
+void ProcessRoutine() {
   if (ReadThermocoupleValue() > 0) {
     M5.Lcd.drawString("error!", 0, 0);
+    isProcessing = false;
   } else {
-    M5.Lcd.drawString(String(thermocoupleTemp, DEC), 50, 100);
-    M5.Lcd.drawString(String(internalTemp, DEC), 50, 50);
+    M5.Lcd.drawString(String(thermocoupleTemp, DEC), 50, 0);
+    m5.Lcd.drawLine(20 + timerCount, 240 - 20 - (int)thermocoupleTemp,
+                    20 + timerCount, 240 - 20 - (int)thermocoupleTemp,
+                    TFT_BLUE);
+    timerCount++;
   }
-  delay(500);
+}
+
+void DrawAxis() {
+  m5.Lcd.drawLine(20, 20, 20, 220, TFT_WHITE);
+  m5.Lcd.drawLine(20, 220, 300, 220, TFT_WHITE);
 }
 
 int ReadThermocoupleValue() {
@@ -57,16 +128,10 @@ int ReadThermocoupleValue() {
     }
     Serial.println();
   } else {
-    if ((thermocouple & 0x8000) == 0) {  // 0℃以上   above 0 Degrees Celsius
+    if ((thermocouple & 0x8000) == 0) {
       thermocoupleTemp = (thermocouple >> 2) * 0.25;
-    } else {  // 0℃未満   below zero
+    } else {
       thermocoupleTemp = (0x3fff - (thermocouple >> 2) + 1) * -0.25;
-    }
-
-    if ((internal & 0x8000) == 0) {  // 0℃以上   above 0 Degrees Celsius
-      internalTemp = (internal >> 4) * 0.0625;
-    } else {  // 0℃未満   below zero
-      internalTemp = (((0xffff - internal) >> 4) + 1) * -0.0625;
     }
     return 0;
   }

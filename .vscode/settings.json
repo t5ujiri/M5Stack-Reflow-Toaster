@@ -4,6 +4,9 @@
     "PLATFORMIO_CALLER": "vscode"
   },
   "files.associations": {
-    "array": "cpp"
-  }
+    "array": "cpp",
+    "system_error": "cpp"
+  },
+  "editor.tabSize": 2,
+  "C_Cpp.clang_format_fallbackStyle": "Google"
 }
