@@ -1,16 +1,10 @@
 #include <Arduino.h>
 #include <M5Stack.h>
 #include <MAX31855.h>
-#include <SPI.h>
 #include <ReflowProfile.h>
+#include <SPI.h>
 
 #define MAX_PROCESS_DURATION 240
-#define THERMO_COUPLE_SCK 18
-#define THERMO_COUPLE_MISO 19
-#define THERMO_COUPLE_MOSI 23
-#define THERMO_COUPLE_SLAVE 2
-#define HEATER1 16
-#define HEATER2 17
 
 // axis profile
 const uint16_t tempMax = 300;
@@ -22,37 +16,23 @@ const uint16_t axisYOrigin = 220;
 
 bool isProcessing;
 unsigned int timerCount;
+ReflowProfile *reflowProfile;
 void StandbyRoutine();
 void ProcessRoutine();
 void DrawAxis();
 void DrawLineOnGraph(float x0, float y0, float x1, float y1, uint32_t color);
 
-#define allOFF 0
-#define upON   1
-#define downON 2
-#define allON  3
-int temperature_control_data[][3] = {
-  {downON, 130, 15},  // 2ON   , temperature130, keep15sec
-  {allON , 230,  0},  // 1&2ON , temperature230, keep0sec
-  {downON, 225,100},  // 2ON   , temperature225, keep100sec
-  {allOFF,   0,  0}   // 1&2OFF, temperature0  , keep0sec
-};
-
 void setup() {
   // M5Stack Setup
   M5.begin(true, false);
   M5.Speaker.setVolume(1);
-  M5.Speaker.setBeep(440, 300);
 
   // Thermocouple setup
   max31855.begin(THERMO_COUPLE_SCK, THERMO_COUPLE_MISO, THERMO_COUPLE_MOSI,
                  THERMO_COUPLE_SLAVE);
 
   // heat control setup
-  pinMode(HEATER1, OUTPUT);
-  pinMode(HEATER2, OUTPUT);
-  digitalWrite(HEATER1, LOW);
-  digitalWrite(HEATER2, LOW);
+  reflowProfile = new ReflowProfile();
 }
 
 void loop() {
@@ -67,8 +47,7 @@ void loop() {
   m5.Lcd.clear();
   DrawAxis();
   M5.Lcd.drawString("Press center button to stop", 50, 10);
-
-  // draw reflow profile
+  reflowProfile->Initialize();
 
   // in process
   while (isProcessing) {
@@ -79,7 +58,7 @@ void loop() {
 }
 
 void StandbyRoutine() {
-  M5.Lcd.drawString("StandBy", 50, 0);
+  M5.Lcd.drawString("StandBy    ", 0, 0);
   M5.Lcd.drawString("Press center button to start", 50, 10);
   if (M5.BtnB.wasPressed()) {
     isProcessing = true;
@@ -87,23 +66,46 @@ void StandbyRoutine() {
 }
 
 void ProcessRoutine() {
+  // thermocouple error
   if (max31855.readThermocoupleTemperature() > 0) {
-    M5.Lcd.drawString("error!", 0, 0);
+    M5.Lcd.drawString("error", 0, 0);
     timerCount = 0;
     isProcessing = false;
-  } else if (timerCount > MAX_PROCESS_DURATION) {
+    reflowProfile->Stop();
+    return;
+  }
+
+  // exceed max process time
+  if (timerCount > MAX_PROCESS_DURATION) {
     timerCount = 0;
     isProcessing = false;
-  } else if (M5.BtnB.wasPressed()) {
+    reflowProfile->Stop();
+    return;
+  }
+
+  // cancel button pressed
+  if (M5.BtnB.wasPressed()) {
+    M5.Lcd.drawString("cancelled", 0, 0);
     timerCount = 0;
+    reflowProfile->Stop();
     isProcessing = false;
-  } else {
-    M5.Lcd.drawString(String(timerCount, DEC) + " / " +
-                          String(max31855.thermocoupleTemp, DEC),
-                      150, 0);
-    DrawLineOnGraph(timerCount, max31855.thermocoupleTemp, timerCount,
-                    max31855.thermocoupleTemp, TFT_BLUE);
-    timerCount++;
+    return;
+  }
+
+  M5.Lcd.drawString(
+      String(timerCount, DEC) + " / " + String(max31855.thermocoupleTemp, 4),
+      150, 0);
+  DrawLineOnGraph(timerCount, max31855.thermocoupleTemp, timerCount,
+                  max31855.thermocoupleTemp, TFT_BLUE);
+  timerCount++;
+
+  reflowProfile->ControlRoutine(max31855.thermocoupleTemp);
+  if (reflowProfile->IsFinished()) {
+    isProcessing = false;
+    reflowProfile->Stop();
+  }
+  if (reflowProfile->IsIndexChanged()) {
+    m5.Speaker.tone(441, 200);
   }
 }
 
@@ -132,13 +134,4 @@ void DrawLineOnGraph(float x0, float y0, float x1, float y1, uint32_t color) {
                   axisXOrigin + (int)((float)axisXLength / timeMax * x1),
                   axisYOrigin - (int)((float)axisYLength / tempMax * y1),
                   color);
-}
-
-void SwitchHeater(uint8_t up, uint8_t down){
-  digitalWrite(HEATER1, up);
-  digitalWrite(HEATER1, down);
-}
-
-bool OnOffControl(int currentTime, ReflowProfile profile){
-  
 }

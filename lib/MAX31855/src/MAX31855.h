@@ -1,5 +1,9 @@
 #ifndef MAX31855_H
 #define MAX31855_H
+#define THERMO_COUPLE_SCK 18
+#define THERMO_COUPLE_MISO 19
+#define THERMO_COUPLE_MOSI 23
+#define THERMO_COUPLE_SLAVE 2
 #include <Arduino.h>
 class MAX31855 {
  public:
